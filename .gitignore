@@ -11,3 +11,6 @@ Makefile
 *.so
 *.a
 
+*.o
+*.so
+*.a

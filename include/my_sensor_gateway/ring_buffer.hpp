@@ -1,0 +1,157 @@
+#ifndef MY_SENSOR_GATEWAY_RING_BUFFER_HPP_
+#define MY_SENSOR_GATEWAY_RING_BUFFER_HPP_
+
+#include <mutex>
+#include <condition_variable>
+#include <vector>
+#include <atomic>
+#include <stdexcept>
+
+/**
+ * @brief 线程安全的环形缓冲区模板类
+ * @tparam T 缓冲区存储的数据类型
+ * 面试核心考点：生产者-消费者模型、线程安全、无锁/轻量级锁设计
+ */
+template <typename T>
+class RingBuffer
+{
+public:
+    /**
+     * @brief 构造函数
+     * @param capacity 缓冲区最大容量（元素个数）
+     */
+    explicit RingBuffer(size_t capacity)
+        : buffer_(capacity), capacity_(capacity), head_(0), tail_(0), count_(0), is_running_(true)
+    {
+        if (capacity == 0) {
+            throw std::invalid_argument("缓冲区容量不能为0");
+        }
+    }
+
+    ~RingBuffer() = default;
+
+    /**
+     * @brief 写入数据到缓冲区（生产者调用）
+     * @param data 要写入的数据
+     * @param timeout_ms 超时时间，默认0表示无限等待
+     * @return 成功返回true，缓冲区满/停止返回false
+     */
+    bool push(const T & data, uint32_t timeout_ms = 0)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+
+        // 等待缓冲区有空闲空间，或超时/停止
+        if (timeout_ms > 0) {
+            if (!not_full_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                [this]() { return count_ < capacity_ || !is_running_; })) {
+                return false; // 超时
+            }
+        } else {
+            not_full_cv_.wait(lock, [this]() { return count_ < capacity_ || !is_running_; });
+        }
+
+        if (!is_running_) {
+            return false;
+        }
+
+        // 写入数据
+        buffer_[head_] = data;
+        head_ = (head_ + 1) % capacity_;
+        count_++;
+
+        // 通知消费者：有新数据了
+        not_empty_cv_.notify_one();
+        return true;
+    }
+
+    /**
+     * @brief 从缓冲区读取数据（消费者调用）
+     * @param data 输出参数，读取到的数据
+     * @param timeout_ms 超时时间，默认0表示无限等待
+     * @return 成功返回true，缓冲区空/停止返回false
+     */
+    bool pop(T & data, uint32_t timeout_ms = 0)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+
+        // 等待缓冲区有数据，或超时/停止
+        if (timeout_ms > 0) {
+            if (!not_empty_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                [this]() { return count_ > 0 || !is_running_; })) {
+                return false; // 超时
+            }
+        } else {
+            not_empty_cv_.wait(lock, [this]() { return count_ > 0 || !is_running_; });
+        }
+
+        if (!is_running_ && count_ == 0) {
+            return false;
+        }
+
+        // 读取数据
+        data = buffer_[tail_];
+        tail_ = (tail_ + 1) % capacity_;
+        count_--;
+
+        // 通知生产者：有空闲空间了
+        not_full_cv_.notify_one();
+        return true;
+    }
+
+    /**
+     * @brief 获取缓冲区中当前的元素个数
+     */
+    size_t size() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return count_;
+    }
+
+    /**
+     * @brief 判断缓冲区是否为空
+     */
+    bool empty() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return count_ == 0;
+    }
+
+    /**
+     * @brief 清空缓冲区
+     */
+    void clear()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        head_ = 0;
+        tail_ = 0;
+        count_ = 0;
+        not_full_cv_.notify_all();
+    }
+
+    /**
+     * @brief 停止缓冲区，唤醒所有等待的线程
+     */
+    void stop()
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        is_running_ = false;
+        not_full_cv_.notify_all();
+        not_empty_cv_.notify_all();
+    }
+
+private:
+    std::vector<T> buffer_;          // 缓冲区底层存储
+    size_t capacity_;                 // 缓冲区最大容量
+    size_t head_;                     // 写指针
+    size_t tail_;                     // 读指针
+    size_t count_;                    // 当前元素个数
+    std::atomic<bool> is_running_;   // 运行状态标志
+
+    // 线程同步核心
+    mutable std::mutex mutex_;                // 互斥锁，保护共享数据
+    std::condition_variable not_full_cv_;     // 条件变量：缓冲区非满
+    std::condition_variable not_empty_cv_;    // 条件变量：缓冲区非空
+};
+
+#endif  // MY_SENSOR_GATEWAY_RING_BUFFER_HPP_
+

@@ -49,12 +49,21 @@ bool ImuDriver::read(SensorData & data)
         return false;
     }
 
-    data = latest_data_;
+    // 修复：直接填充输出参数，不调用拷贝赋值
     data.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    data.is_valid = true;
+    data.sensor_name = get_name();
+    data.sensor_type = get_type();
+    data.is_valid = latest_data_.is_valid;
+    
+    // 直接拷贝IMU数组数据
+    memcpy(data.linear_acceleration, latest_data_.linear_acceleration, sizeof(data.linear_acceleration));
+    memcpy(data.angular_velocity, latest_data_.angular_velocity, sizeof(data.angular_velocity));
+    memcpy(data.orientation, latest_data_.orientation, sizeof(data.orientation));
+
     return true;
 }
+
 
 bool ImuDriver::close()
 {
@@ -72,7 +81,7 @@ bool ImuDriver::close()
 
 void ImuDriver::imu_data_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
 {
-    // 填充IMU专属数据
+    // 填充IMU专属数据，零动态分配
     latest_data_.sensor_name = get_name();
     latest_data_.sensor_type = get_type();
     // 加速度
@@ -89,6 +98,8 @@ void ImuDriver::imu_data_callback(const sensor_msgs::msg::Imu::SharedPtr msg)
     latest_data_.orientation[2] = msg->orientation.z;
     latest_data_.orientation[3] = msg->orientation.w;
 
+    latest_data_.is_valid = true;
     data_received_ = true;
 }
+
 

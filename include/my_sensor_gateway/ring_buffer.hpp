@@ -36,15 +36,18 @@ public:
      * @param timeout_ms 超时时间，默认0表示无限等待
      * @return 成功返回true，缓冲区满/停止返回false
      */
+
+    /**
+    * @brief 左值push（兼容原有逻辑）
+    */
     bool push(const T & data, uint32_t timeout_ms = 0)
     {
         std::unique_lock<std::mutex> lock(mutex_);
 
-        // 等待缓冲区有空闲空间，或超时/停止
         if (timeout_ms > 0) {
             if (!not_full_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
                 [this]() { return count_ < capacity_ || !is_running_; })) {
-                return false; // 超时
+                return false;
             }
         } else {
             not_full_cv_.wait(lock, [this]() { return count_ < capacity_ || !is_running_; });
@@ -54,12 +57,40 @@ public:
             return false;
         }
 
-        // 写入数据
+        // 拷贝赋值
         buffer_[head_] = data;
         head_ = (head_ + 1) % capacity_;
         count_++;
 
-        // 通知消费者：有新数据了
+        not_empty_cv_.notify_one();
+        return true;
+    }
+
+    /**
+    * @brief 新增：右值push，零拷贝移动语义，核心优化点
+    */
+    bool push(T && data, uint32_t timeout_ms = 0)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+
+        if (timeout_ms > 0) {
+            if (!not_full_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                [this]() { return count_ < capacity_ || !is_running_; })) {
+                return false;
+            }
+        } else {
+            not_full_cv_.wait(lock, [this]() { return count_ < capacity_ || !is_running_; });
+        }
+
+        if (!is_running_) {
+            return false;
+        }
+
+        // 移动赋值，零内存拷贝，核心优化！
+        buffer_[head_] = std::move(data);
+        head_ = (head_ + 1) % capacity_;
+        count_++;
+
         not_empty_cv_.notify_one();
         return true;
     }
@@ -70,15 +101,18 @@ public:
      * @param timeout_ms 超时时间，默认0表示无限等待
      * @return 成功返回true，缓冲区空/停止返回false
      */
+
+    /**
+    * @brief 读取数据，通过右值引用返回，零拷贝
+    */
     bool pop(T & data, uint32_t timeout_ms = 0)
     {
         std::unique_lock<std::mutex> lock(mutex_);
 
-        // 等待缓冲区有数据，或超时/停止
         if (timeout_ms > 0) {
             if (!not_empty_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
                 [this]() { return count_ > 0 || !is_running_; })) {
-                return false; // 超时
+                return false;
             }
         } else {
             not_empty_cv_.wait(lock, [this]() { return count_ > 0 || !is_running_; });
@@ -88,12 +122,11 @@ public:
             return false;
         }
 
-        // 读取数据
-        data = buffer_[tail_];
+        // 移动赋值，零内存拷贝，核心优化！
+        data = std::move(buffer_[tail_]);
         tail_ = (tail_ + 1) % capacity_;
         count_--;
 
-        // 通知生产者：有空闲空间了
         not_full_cv_.notify_one();
         return true;
     }

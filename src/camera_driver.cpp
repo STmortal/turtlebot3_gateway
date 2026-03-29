@@ -50,10 +50,20 @@ bool CameraDriver::read(SensorData & data)
         return false;
     }
 
-    data = latest_data_;
+    // 修复：直接填充输出参数，不调用拷贝赋值
     data.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    data.is_valid = true;
+    data.sensor_name = get_name();
+    data.sensor_type = get_type();
+    data.is_valid = latest_data_.is_valid;
+    data.image_width = latest_data_.image_width;
+    data.image_height = latest_data_.image_height;
+    data.image_encoding = latest_data_.image_encoding;
+    data.image_data_size = latest_data_.image_data_size;
+    
+    // 直接拷贝图像数据，预分配内存无动态开销
+    memcpy(data.image_data, latest_data_.image_data, latest_data_.image_data_size);
+
     return true;
 }
 
@@ -105,6 +115,12 @@ void CameraDriver::camera_data_callback(const sensor_msgs::msg::Image::SharedPtr
     latest_data_.image_width = msg->width;
     latest_data_.image_height = msg->height;
     latest_data_.image_encoding = msg->encoding;
-    latest_data_.image_data = msg->data;
+    latest_data_.image_data_size = std::min(msg->data.size(), (size_t)SensorData::MAX_IMAGE_SIZE);
+    
+    // 拷贝图像数据，预分配内存，无动态分配
+    memcpy(latest_data_.image_data, msg->data.data(), latest_data_.image_data_size);
+
+    latest_data_.is_valid = true;
     data_received_ = true;
 }
+

@@ -56,7 +56,6 @@ private:
         static uint64_t count = 0;
         count++;
 
-        // 每10次打印一次日志，避免刷屏
         if (count % 10 == 0) {
             RCLCPP_INFO(this->get_logger(), "----- 第%lu次读取传感器数据 -----", count);
         }
@@ -64,8 +63,8 @@ private:
         // 读取激光雷达数据
         if (sensor_manager_->read_sensor_data("front_lidar", data, 10)) {
             if (count % 10 == 0) {
-                RCLCPP_INFO(this->get_logger(), "激光雷达数据有效，测距范围 [%.2f, %.2f] m",
-                    data.range_min, data.range_max);
+                RCLCPP_INFO(this->get_logger(), "激光雷达数据有效，测距范围 [%.2f, %.2f] m，有效点数：%zu",
+                    data.range_min, data.range_max, data.ranges_count);
             }
         }
 
@@ -80,8 +79,8 @@ private:
         // 读取相机数据
         if (sensor_manager_->read_sensor_data("depth_camera", data, 10)) {
             if (count % 10 == 0) {
-                RCLCPP_INFO(this->get_logger(), "深度相机数据有效，分辨率 %ux%u",
-                    data.image_width, data.image_height);
+                RCLCPP_INFO(this->get_logger(), "深度相机数据有效，分辨率 %ux%u，数据长度：%zu",
+                    data.image_width, data.image_height, data.image_data_size);
             }
         }
     }

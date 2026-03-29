@@ -132,35 +132,34 @@ std::vector<std::string> SensorManager::get_all_sensor_names() const
 }
 
 // 采集线程核心函数：无限循环读取传感器数据，写入环形缓冲区
+ // 采集线程核心函数：无限循环读取传感器数据，写入环形缓冲区
 void SensorManager::sensor_collect_thread(std::shared_ptr<SensorBase> sensor)
 {
     std::string sensor_name = sensor->get_name();
     RCLCPP_INFO(node_->get_logger(), "传感器 [%s] 采集线程开始运行", sensor_name.c_str());
 
-    // 设置线程名称，方便调试
     pthread_setname_np(pthread_self(), sensor_name.c_str());
 
     SensorData data;
     while (is_running_) {
         // 读取传感器数据
         if (sensor->read(data)) {
-            // 写入环形缓冲区
-            if (!buffers_[sensor_name]->push(data, 100)) {
+            // 优化：用std::move移动语义，零拷贝写入缓冲区
+            if (!buffers_[sensor_name]->push(std::move(data), 100)) {
                 RCLCPP_WARN_THROTTLE(node_->get_logger(),
-                    *node_->get_clock(), 1000, // 1秒最多打印一次
+                    *node_->get_clock(), 1000,
                     "传感器 [%s] 缓冲区已满，数据丢失", sensor_name.c_str());
             }
         }
-        // 按传感器类型适配采集频率，避免CPU占用过高
+        // 按传感器类型适配采集频率
         if (sensor->get_type() == "imu") {
-            // IMU 100Hz，休眠10ms
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         } else {
-            // 激光雷达/相机 10Hz，休眠100ms
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
     }
 
     RCLCPP_INFO(node_->get_logger(), "传感器 [%s] 采集线程结束", sensor_name.c_str());
 }
+
 

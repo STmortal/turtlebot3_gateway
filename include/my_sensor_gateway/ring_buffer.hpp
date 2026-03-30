@@ -31,18 +31,16 @@ public:
     ~RingBuffer() = default;
 
     /**
-     * @brief 写入数据到缓冲区（生产者调用）
-     * @param data 要写入的数据
-     * @param timeout_ms 超时时间，默认0表示无限等待
-     * @return 成功返回true，缓冲区满/停止返回false
-     */
-
-    /**
     * @brief 左值push（兼容原有逻辑）
     */
     bool push(const T & data, uint32_t timeout_ms = 0)
     {
         std::unique_lock<std::mutex> lock(mutex_);
+
+        // 先检查是否已停止
+        if (!is_running_) {
+            return false;
+        }
 
         if (timeout_ms > 0) {
             if (!not_full_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
@@ -53,6 +51,7 @@ public:
             not_full_cv_.wait(lock, [this]() { return count_ < capacity_ || !is_running_; });
         }
 
+        // 二次检查停止状态
         if (!is_running_) {
             return false;
         }
@@ -73,6 +72,11 @@ public:
     {
         std::unique_lock<std::mutex> lock(mutex_);
 
+        // 先检查是否已停止
+        if (!is_running_) {
+            return false;
+        }
+
         if (timeout_ms > 0) {
             if (!not_full_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
                 [this]() { return count_ < capacity_ || !is_running_; })) {
@@ -82,6 +86,7 @@ public:
             not_full_cv_.wait(lock, [this]() { return count_ < capacity_ || !is_running_; });
         }
 
+        // 二次检查停止状态
         if (!is_running_) {
             return false;
         }
@@ -96,18 +101,16 @@ public:
     }
 
     /**
-     * @brief 从缓冲区读取数据（消费者调用）
-     * @param data 输出参数，读取到的数据
-     * @param timeout_ms 超时时间，默认0表示无限等待
-     * @return 成功返回true，缓冲区空/停止返回false
-     */
-
-    /**
     * @brief 读取数据，通过右值引用返回，零拷贝
     */
     bool pop(T & data, uint32_t timeout_ms = 0)
     {
         std::unique_lock<std::mutex> lock(mutex_);
+
+        // 先检查是否已停止
+        if (!is_running_) {
+            return false;
+        }
 
         if (timeout_ms > 0) {
             if (!not_empty_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
@@ -118,7 +121,8 @@ public:
             not_empty_cv_.wait(lock, [this]() { return count_ > 0 || !is_running_; });
         }
 
-        if (!is_running_ && count_ == 0) {
+        // 🛑 核心修复：停止后直接返回false，不再读取数据
+        if (!is_running_) {
             return false;
         }
 
@@ -187,4 +191,3 @@ private:
 };
 
 #endif  // MY_SENSOR_GATEWAY_RING_BUFFER_HPP_
-

@@ -7,6 +7,7 @@
 #include <vector>
 #include <functional>
 #include "rclcpp/rclcpp.hpp"
+#include <shared_mutex>
 
 // ====================== 通用传感器数据结构体 ======================
 // 优化：预分配固定大小内存，运行时零动态分配，支持写时复制
@@ -132,6 +133,30 @@ struct SensorData
 
 
 // ====================== 字符设备驱动通用接口枚举 ======================
+
+enum class DriverState : uint8_t
+{
+    UNINITIALIZED = 0,
+    INITIALIZED = 1,
+    OPENED = 2,
+    ERROR =3,
+    CLOSED = 4
+};
+// 统一错误码枚举，覆盖所有驱动常见错误
+enum class DriverError : int32_t
+{
+    SUCCESS = 0,                // 成功
+    ERROR_UNINITIALIZED = -1,   // 未初始化
+    ERROR_STATE_INVALID = -2,   // 状态非法
+    ERROR_DEVICE_OPEN = -3,     // 设备打开失败
+    ERROR_DEVICE_CLOSE = -4,    // 设备关闭失败
+    ERROR_DATA_TIMEOUT = -5,    // 数据读取超时
+    ERROR_DATA_INVALID = -6,    // 数据无效
+    ERROR_BUFFER_FULL = -7,     // 缓冲区满
+    ERROR_BUFFER_EMPTY = -8,    // 缓冲区空
+    ERROR_PARAM_INVALID = -9,   // 参数无效
+    ERROR_UNKNOWN = -99         // 未知错误
+};
 // 模拟真实硬件的ioctl命令，嵌入式驱动岗面试必问
 enum class SensorIoctlCmd : uint32_t
 {
@@ -196,10 +221,10 @@ public:
     virtual ~SensorBase() = default;
 
     // ====================== 驱动核心生命周期接口 ======================
-    virtual bool init() = 0;
-    virtual bool open() = 0;
-    virtual bool read(SensorData & data) = 0;
-    virtual bool close() = 0;
+    virtual DriverError init() = 0;
+    virtual DriverError open() = 0;
+    virtual DriverError read(SensorData & data) = 0;
+    virtual DriverError close() = 0;
 
     // ====================== 新增：字符设备驱动通用接口 ======================
     // 模拟真实硬件的write/ioctl系统调用，嵌入式驱动岗面试必问
@@ -232,7 +257,8 @@ public:
     // ====================== 通用工具接口 ======================
     std::string get_name() const { return name_; }
     std::string get_type() const { return type_; }
-    bool is_opened() const { return is_opened_; }
+    DriverState get_state() const { return state_; }
+    bool is_opened() const { return state_ == DriverState::OPENED; }
     int get_fd() const { return fd_; }
 
 protected:
@@ -242,6 +268,8 @@ protected:
     bool is_opened_;
     int fd_;  // 模拟真实硬件的文件描述符
     SensorData latest_data_;
+    mutable std::shared_mutex data_mutex_;
+    DriverState state_ = DriverState::UNINITIALIZED;
 };
 
 #endif  // MY_SENSOR_GATEWAY_SENSOR_BASE_HPP_

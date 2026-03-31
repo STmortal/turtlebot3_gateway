@@ -14,10 +14,10 @@ public:
     ~LidarDriver() override;
 
     // 重写基类的纯虚函数
-    bool init() override;
-    bool open() override;
-    bool read(SensorData & data) override;
-    bool close() override;
+    DriverError init() override;
+    DriverError open() override;
+    DriverError read(SensorData & data) override;
+    DriverError close() override;
 
 private:
     // 激光雷达数据回调函数：收到/scan话题数据时调用

@@ -1,5 +1,7 @@
 #include "my_sensor_gateway/sensor_manager.hpp"
 #include <chrono>
+#include <pthread.h>
+#include <cstring>
 
 SensorManager::SensorManager(rclcpp::Node::SharedPtr node)
 : node_(node), is_running_(false)
@@ -26,7 +28,6 @@ bool SensorManager::register_sensor(std::shared_ptr<SensorBase> sensor, size_t b
         return true;
     }
 
-    // 注册传感器，创建对应的环形缓冲区
     sensors_[sensor_name] = sensor;
     buffers_[sensor_name] = std::make_shared<RingBuffer<SensorData>>(buffer_capacity);
     RCLCPP_INFO(node_->get_logger(), "传感器 [%s] 注册成功，缓冲区容量：%zu",
@@ -38,7 +39,8 @@ bool SensorManager::init_all_sensors()
 {
     RCLCPP_INFO(node_->get_logger(), "===== 开始初始化所有传感器 =====");
     for (auto & [name, sensor] : sensors_) {
-        if (!sensor->init()) {
+        // 修复：判断 DriverError == SUCCESS
+        if (sensor->init() != DriverError::SUCCESS) {
             RCLCPP_ERROR(node_->get_logger(), "传感器 [%s] 初始化失败", name.c_str());
             return false;
         }
@@ -57,16 +59,15 @@ bool SensorManager::start_all_sensors()
     RCLCPP_INFO(node_->get_logger(), "===== 启动所有传感器采集线程 =====");
     is_running_ = true;
 
-    // 先打开所有传感器
     for (auto & [name, sensor] : sensors_) {
-        if (!sensor->open()) {
+        // 修复：判断 DriverError
+        if (sensor->open() != DriverError::SUCCESS) {
             RCLCPP_ERROR(node_->get_logger(), "传感器 [%s] 打开失败", name.c_str());
             is_running_ = false;
             return false;
         }
     }
 
-    // 为每个传感器创建独立的采集线程
     for (auto & [name, sensor] : sensors_) {
         collect_threads_[name] = std::make_shared<std::thread>(
             &SensorManager::sensor_collect_thread, this, sensor);
@@ -86,12 +87,10 @@ void SensorManager::stop_all_sensors()
     RCLCPP_INFO(node_->get_logger(), "===== 停止所有传感器采集线程 =====");
     is_running_ = false;
 
-    // 停止所有环形缓冲区，唤醒所有等待的线程
     for (auto & [name, buffer] : buffers_) {
         buffer->stop();
     }
 
-    // 等待所有采集线程退出
     for (auto & [name, thread] : collect_threads_) {
         if (thread && thread->joinable()) {
             thread->join();
@@ -99,12 +98,10 @@ void SensorManager::stop_all_sensors()
         }
     }
 
-    // 关闭所有传感器
     for (auto & [name, sensor] : sensors_) {
         sensor->close();
     }
 
-    // 清空所有容器
     collect_threads_.clear();
     buffers_.clear();
     sensors_.clear();
@@ -131,27 +128,27 @@ std::vector<std::string> SensorManager::get_all_sensor_names() const
     return names;
 }
 
-// 采集线程核心函数：无限循环读取传感器数据，写入环形缓冲区
- // 采集线程核心函数：无限循环读取传感器数据，写入环形缓冲区
 void SensorManager::sensor_collect_thread(std::shared_ptr<SensorBase> sensor)
 {
     std::string sensor_name = sensor->get_name();
     RCLCPP_INFO(node_->get_logger(), "传感器 [%s] 采集线程开始运行", sensor_name.c_str());
 
-    pthread_setname_np(pthread_self(), sensor_name.c_str());
+    char thread_name[16];
+    strncpy(thread_name, sensor_name.c_str(), 15);
+    thread_name[15] = '\0';
+    pthread_setname_np(pthread_self(), thread_name);
 
     SensorData data;
     while (is_running_) {
-        // 读取传感器数据
-        if (sensor->read(data)) {
-            // 优化：用std::move移动语义，零拷贝写入缓冲区
+        // 修复：判断 DriverError == SUCCESS
+        if (sensor->read(data) == DriverError::SUCCESS) {
             if (!buffers_[sensor_name]->push(std::move(data), 100)) {
                 RCLCPP_WARN_THROTTLE(node_->get_logger(),
                     *node_->get_clock(), 1000,
                     "传感器 [%s] 缓冲区已满，数据丢失", sensor_name.c_str());
             }
         }
-        // 按传感器类型适配采集频率
+
         if (sensor->get_type() == "imu") {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         } else {
@@ -161,5 +158,3 @@ void SensorManager::sensor_collect_thread(std::shared_ptr<SensorBase> sensor)
 
     RCLCPP_INFO(node_->get_logger(), "传感器 [%s] 采集线程结束", sensor_name.c_str());
 }
-
-

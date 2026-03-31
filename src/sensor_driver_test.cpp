@@ -116,12 +116,12 @@ private:
         SensorData data;
 
         RCLCPP_INFO(this->get_logger(), "----- 读取传感器数据 -----");
-        if (lidar_driver_->read(data)) {
+        if (lidar_driver_->read(data) == DriverError::SUCCESS) {
             RCLCPP_INFO(this->get_logger(), "激光雷达 [%s] 数据有效：测距范围 [%.2f, %.2f] m",
                 data.sensor_name.c_str(), data.range_min, data.range_max);
         }
 
-        if (imu_driver_->read(data)) {
+        if (imu_driver_->read(data) == DriverError::SUCCESS) {
             RCLCPP_INFO(this->get_logger(), "IMU [%s] 数据有效：加速度 X=%.2f Y=%.2f Z=%.2f m/s²",
                 data.sensor_name.c_str(),
                 data.linear_acceleration[0],
@@ -129,7 +129,7 @@ private:
                 data.linear_acceleration[2]);
         }
 
-        if (camera_driver_->read(data)) {
+        if (camera_driver_->read(data) == DriverError::SUCCESS) {
             RCLCPP_INFO(this->get_logger(), "深度相机 [%s] 数据有效：分辨率 %ux%u, 编码 %s",
                 data.sensor_name.c_str(),
                 data.image_width, data.image_height,

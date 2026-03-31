@@ -1,7 +1,7 @@
 #ifndef MY_SENSOR_GATEWAY_RING_BUFFER_HPP_
 #define MY_SENSOR_GATEWAY_RING_BUFFER_HPP_
 
-#include <mutex>
+#include <shared_mutex>
 #include <condition_variable>
 #include <vector>
 #include <atomic>
@@ -35,7 +35,7 @@ public:
     */
     bool push(const T & data, uint32_t timeout_ms = 0)
     {
-        std::unique_lock<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(mutex_);
 
         // 先检查是否已停止
         if (!is_running_) {
@@ -70,7 +70,7 @@ public:
     */
     bool push(T && data, uint32_t timeout_ms = 0)
     {
-        std::unique_lock<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(mutex_);
 
         // 先检查是否已停止
         if (!is_running_) {
@@ -83,7 +83,7 @@ public:
                 return false;
             }
         } else {
-            not_full_cv_.wait(lock, [this]() { return count_ < capacity_ || !is_running_; });
+            not_full_cv_.wait(lock, [this]() { return !is_running_ || count_ < capacity_; });
         }
 
         // 二次检查停止状态
@@ -105,7 +105,7 @@ public:
     */
     bool pop(T & data, uint32_t timeout_ms = 0)
     {
-        std::unique_lock<std::mutex> lock(mutex_);
+        std::unique_lock<std::shared_mutex> lock(mutex_);
 
         // 先检查是否已停止
         if (!is_running_) {
@@ -114,7 +114,7 @@ public:
 
         if (timeout_ms > 0) {
             if (!not_empty_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
-                [this]() { return count_ > 0 || !is_running_; })) {
+                [this]() { return !is_running_ || count_ > 0; })) {
                 return false;
             }
         } else {
@@ -140,7 +140,7 @@ public:
      */
     size_t size() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::shared_mutex> lock(mutex_);
         return count_;
     }
 
@@ -149,7 +149,7 @@ public:
      */
     bool empty() const
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::shared_mutex> lock(mutex_);
         return count_ == 0;
     }
 
@@ -158,7 +158,7 @@ public:
      */
     void clear()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::shared_mutex> lock(mutex_);
         head_ = 0;
         tail_ = 0;
         count_ = 0;
@@ -170,7 +170,7 @@ public:
      */
     void stop()
     {
-        std::lock_guard<std::mutex> lock(mutex_);
+        std::lock_guard<std::shared_mutex> lock(mutex_);
         is_running_ = false;
         not_full_cv_.notify_all();
         not_empty_cv_.notify_all();
@@ -185,9 +185,9 @@ private:
     std::atomic<bool> is_running_;   // 运行状态标志
 
     // 线程同步核心
-    mutable std::mutex mutex_;                // 互斥锁，保护共享数据
-    std::condition_variable not_full_cv_;     // 条件变量：缓冲区非满
-    std::condition_variable not_empty_cv_;    // 条件变量：缓冲区非空
+    mutable std::shared_mutex mutex_;                // 互斥锁，保护共享数据
+    std::condition_variable_any not_full_cv_;     // 条件变量：缓冲区非满
+    std::condition_variable_any not_empty_cv_;    // 条件变量：缓冲区非空
 };
 
 #endif  // MY_SENSOR_GATEWAY_RING_BUFFER_HPP_

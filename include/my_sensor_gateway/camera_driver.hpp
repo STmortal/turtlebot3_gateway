@@ -1,31 +1,29 @@
-#ifndef MY_SENSOR_GATEWAY_CAMERA_DRIVER_HPP_
-#define MY_SENSOR_GATEWAY_CAMERA_DRIVER_HPP_
+#ifndef MY_SENSOR_GATEWAY_CAMERA_DRIVER_HPP
+#define MY_SENSOR_GATEWAY_CAMERA_DRIVER_HPP
 
 #include "my_sensor_gateway/sensor_base.hpp"
+#include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/image.hpp"
 
 class CameraDriver : public SensorBase
 {
 public:
-    explicit CameraDriver(
-        const std::string & name,
-        rclcpp::Node::SharedPtr node);
-    ~CameraDriver() override;
+  CameraDriver(const std::string & name, rclcpp::Node::SharedPtr node);
+  ~CameraDriver() override;
 
-    bool init() override;
-    bool open() override;
-    bool read(SensorData & data) override;
-    bool close() override;
+  DriverError init() override;
+  DriverError open() override;
+  DriverError read(SensorData & data) override;
+  DriverError close() override;
 
-    // 重写ioctl接口，实现相机参数设置
-    bool ioctl(SensorIoctlCmd cmd, void * arg) override;
+  bool ioctl(SensorIoctlCmd cmd, void * arg) override;
 
 private:
-    void camera_data_callback(const sensor_msgs::msg::Image::SharedPtr msg);
+  void camera_data_callback(const sensor_msgs::msg::Image::SharedPtr msg);
 
-    rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
-    bool data_received_;
-    uint32_t exposure_time_;  // 模拟相机曝光时间参数
+  rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr camera_sub_;
+  bool data_received_;
+  uint32_t exposure_time_;
 };
 
-#endif  // MY_SENSOR_GATEWAY_CAMERA_DRIVER_HPP_
+#endif

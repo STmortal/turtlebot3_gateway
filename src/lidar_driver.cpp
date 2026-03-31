@@ -14,56 +14,65 @@ LidarDriver::~LidarDriver()
 }
 
 // 初始化：对应真实激光雷达的参数配置、波特率设置
-bool LidarDriver::init()
+DriverError LidarDriver::init()
 {
+    if (state_ != DriverState::UNINITIALIZED) {
+        RCLCPP_ERROR(node_->get_logger(), "激光雷达 [%s] 初始化失败：状态非法", get_name().c_str());
+        state_ = DriverState::ERROR;
+        return DriverError::ERROR_STATE_INVALID;
+    }
+
     RCLCPP_INFO(node_->get_logger(), "激光雷达 [%s] 初始化中...", get_name().c_str());
-    // 真实硬件场景：这里会做串口初始化、寄存器配置、雷达参数设置
-    // 仿真场景：只需要重置标志位，初始化完成
     data_received_ = false;
+    state_ = DriverState::INITIALIZED;
     RCLCPP_INFO(node_->get_logger(), "激光雷达 [%s] 初始化完成", get_name().c_str());
-    return true;
+    return DriverError::SUCCESS;
 }
 
+
 // 打开设备：对应真实硬件的open()，打开串口设备文件，启动数据接收
-bool LidarDriver::open()
+DriverError LidarDriver::open()
 {
-    if (is_opened_) {
-        RCLCPP_WARN(node_->get_logger(), "激光雷达 [%s] 已经打开", get_name().c_str());
-        return true;
+    // 已打开 → 直接返回成功，不报错
+    if (state_ == DriverState::OPENED) {
+        RCLCPP_INFO(node_->get_logger(), "激光雷达 [%s] 已处于打开状态，无需重复操作", get_name().c_str());
+        return DriverError::SUCCESS;
+    }
+
+    if (state_ != DriverState::INITIALIZED) {
+        RCLCPP_ERROR(node_->get_logger(), "激光雷达 [%s] 打开失败：未初始化或已打开", get_name().c_str());
+        state_ = DriverState::ERROR;
+        return DriverError::ERROR_STATE_INVALID;
     }
 
     RCLCPP_INFO(node_->get_logger(), "激光雷达 [%s] 打开中...", get_name().c_str());
-    
-    // 优化：ROS2零拷贝订阅配置
-    rclcpp::SubscriptionOptions options;
-    // 启用零拷贝，避免DDS层到用户层的消息拷贝
-    options.use_intra_process_comm = rclcpp::IntraProcessSetting::Enable;
-
-    // 创建零拷贝订阅者
+    // 订阅激光雷达话题（示例）
     lidar_sub_ = node_->create_subscription<sensor_msgs::msg::LaserScan>(
-        "/scan", 
-        rclcpp::QoS(10).best_effort(), // 激光雷达用尽力而为QoS，降低延迟
-        std::bind(&LidarDriver::lidar_data_callback, this, std::placeholders::_1),
-        options);
+        "/scan", 10,
+        std::bind(&LidarDriver::lidar_data_callback, this, std::placeholders::_1));
 
-    is_opened_ = true;
+    state_ = DriverState::OPENED;
     RCLCPP_INFO(node_->get_logger(), "激光雷达 [%s] 打开成功", get_name().c_str());
-    return true;
+    return DriverError::SUCCESS;
 }
 
 
+
+
 // 读取数据：对应真实硬件的read()，从设备读取数据
-bool LidarDriver::read(SensorData & data)
+DriverError LidarDriver::read(SensorData & data)
 {
-    if (!is_opened_) {
+    if (state_ != DriverState::OPENED) {
         RCLCPP_ERROR(node_->get_logger(), "激光雷达 [%s] 未打开，无法读取数据", get_name().c_str());
-        return false;
+        return DriverError::ERROR_STATE_INVALID;
     }
 
     if (!data_received_) {
         RCLCPP_WARN(node_->get_logger(), "激光雷达 [%s] 暂无数据", get_name().c_str());
-        return false;
+        return DriverError::ERROR_STATE_INVALID;
     }
+
+    std::shared_lock<std::shared_mutex> lock(data_mutex_);
 
     // 修复：直接填充输出参数，不调用拷贝赋值，零拷贝优化完全保留
     data.timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -79,30 +88,40 @@ bool LidarDriver::read(SensorData & data)
     memcpy(data.ranges, latest_data_.ranges, sizeof(data.ranges));
 
     RCLCPP_DEBUG(node_->get_logger(), "激光雷达 [%s] 数据读取成功", get_name().c_str());
-    return true;
+    return DriverError::SUCCESS;
 }
 
 
 // 关闭设备：对应真实硬件的close()，关闭设备文件
-bool LidarDriver::close()
+DriverError LidarDriver::close()
 {
-    if (!is_opened_) {
-        return true;
+    // 已关闭/未初始化，直接返回
+    if (state_ == DriverState::CLOSED || state_ == DriverState::UNINITIALIZED) {
+        return DriverError::SUCCESS;
     }
 
     RCLCPP_INFO(node_->get_logger(), "激光雷达 [%s] 关闭中...", get_name().c_str());
-    // 真实硬件场景：调用close()关闭串口设备
-    // 仿真场景：重置订阅者，停止数据接收
     lidar_sub_.reset();
-    is_opened_ = false;
     data_received_ = false;
+
+    // 关闭成功，更新状态
+    state_ = DriverState::CLOSED;
     RCLCPP_INFO(node_->get_logger(), "激光雷达 [%s] 关闭成功", get_name().c_str());
-    return true;
+    return DriverError::SUCCESS;
 }
+
 
 // 激光雷达数据回调函数：收到话题数据时，更新最新数据
 void LidarDriver::lidar_data_callback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
-{
+{   
+    std::unique_lock<std::shared_mutex> lock(data_mutex_);
+
+    if (msg->ranges.empty() || msg->range_min <= 0 || msg->range_max <= msg->range_min) {
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000, "激光雷达数据非法，丢弃");
+        latest_data_.is_valid = false;
+        return;
+    }
+
     // 填充通用数据结构体，零动态分配
     latest_data_.sensor_name = get_name();
     latest_data_.sensor_type = get_type();

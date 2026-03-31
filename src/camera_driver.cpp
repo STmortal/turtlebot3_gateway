@@ -11,20 +11,26 @@ CameraDriver::~CameraDriver()
     close();
 }
 
-bool CameraDriver::init()
+DriverError CameraDriver::init()
 {
+    if (state_ != DriverState::UNINITIALIZED) {
+        RCLCPP_ERROR(node_->get_logger(), "深度相机 [%s] 初始化失败：状态非法", get_name().c_str());
+        state_ = DriverState::ERROR;
+        return DriverError::ERROR_STATE_INVALID;
+    }
+
     RCLCPP_INFO(node_->get_logger(), "深度相机 [%s] 初始化中...", get_name().c_str());
     data_received_ = false;
-    exposure_time_ = 10000;  // 默认曝光时间10ms
+    state_ = DriverState::INITIALIZED;
     RCLCPP_INFO(node_->get_logger(), "深度相机 [%s] 初始化完成", get_name().c_str());
-    return true;
+    return DriverError::SUCCESS;
 }
 
-bool CameraDriver::open()
+DriverError CameraDriver::open()
 {
-    if (is_opened_) {
-        RCLCPP_WARN(node_->get_logger(), "深度相机 [%s] 已经打开", get_name().c_str());
-        return true;
+    if (state_ != DriverState::INITIALIZED) {
+        RCLCPP_WARN(node_->get_logger(), "深度相机 [%s] 打开失败：未初始化或已打开", get_name().c_str());
+        return DriverError::ERROR_STATE_INVALID;
     }
 
     RCLCPP_INFO(node_->get_logger(), "深度相机 [%s] 打开中...", get_name().c_str());
@@ -33,21 +39,22 @@ bool CameraDriver::open()
         "/camera/depth/image_raw", 10,
         std::bind(&CameraDriver::camera_data_callback, this, std::placeholders::_1));
 
-    is_opened_ = true;
+    // 打开成功，更新状态
+    state_ = DriverState::OPENED;
     RCLCPP_INFO(node_->get_logger(), "深度相机 [%s] 打开成功", get_name().c_str());
-    return true;
+    return DriverError::SUCCESS;
 }
 
-bool CameraDriver::read(SensorData & data)
+DriverError CameraDriver::read(SensorData & data)
 {
-    if (!is_opened_) {
+    if (state_ != DriverState::OPENED) {
         RCLCPP_ERROR(node_->get_logger(), "深度相机 [%s] 未打开，无法读取数据", get_name().c_str());
-        return false;
+        return DriverError::ERROR_STATE_INVALID;
     }
 
     if (!data_received_) {
         RCLCPP_WARN(node_->get_logger(), "深度相机 [%s] 暂无数据", get_name().c_str());
-        return false;
+        return DriverError::ERROR_STATE_INVALID;
     }
 
     // 修复：直接填充输出参数，不调用拷贝赋值
@@ -64,13 +71,14 @@ bool CameraDriver::read(SensorData & data)
     // 直接拷贝图像数据，预分配内存无动态开销
     memcpy(data.image_data, latest_data_.image_data, latest_data_.image_data_size);
 
-    return true;
+    return DriverError::SUCCESS;
 }
 
-bool CameraDriver::close()
+DriverError CameraDriver::close()
 {
-    if (!is_opened_) {
-        return true;
+    // 已关闭/未初始化，直接返回
+    if (state_ == DriverState::CLOSED || state_ == DriverState::UNINITIALIZED) {
+        return DriverError::SUCCESS;
     }
 
     RCLCPP_INFO(node_->get_logger(), "深度相机 [%s] 关闭中...", get_name().c_str());
@@ -78,7 +86,7 @@ bool CameraDriver::close()
     is_opened_ = false;
     data_received_ = false;
     RCLCPP_INFO(node_->get_logger(), "深度相机 [%s] 关闭成功", get_name().c_str());
-    return true;
+    return DriverError::SUCCESS;
 }
 
 bool CameraDriver::ioctl(SensorIoctlCmd cmd, void * arg)
@@ -110,6 +118,8 @@ bool CameraDriver::ioctl(SensorIoctlCmd cmd, void * arg)
 
 void CameraDriver::camera_data_callback(const sensor_msgs::msg::Image::SharedPtr msg)
 {
+    std::unique_lock<std::shared_mutex> lock(data_mutex_);
+    
     latest_data_.sensor_name = get_name();
     latest_data_.sensor_type = get_type();
     latest_data_.image_width = msg->width;
